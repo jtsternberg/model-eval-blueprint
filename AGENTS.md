@@ -25,11 +25,11 @@ Reviewer, a model from a **different** vendor or family than the writer (a key t
 
 ```sh
 { cat prompts/answer-key-reviewer.md; printf '\n\nJOB:\n'; cat prompts/jobs/<job>.md; printf '\n\nSOURCE:\n'; cat inputs/<name>.txt; printf '\n\nKEY:\n'; cat inputs/<name>.key.draft.json; } \
-  | sh -c 'H=$(mktemp -d) && mkdir $H/c && ln -s ~/.codex/auth.json $H/c/ && HOME=$H CODEX_HOME=$H/c codex exec --skip-git-repo-check --ephemeral -s read-only -C $H -o $H/out - >/dev/null && cat $H/out; rm -rf $H' \
+  | sh -c 'H=$(mktemp -d) && { mkdir $H/c && ln -s ~/.codex/auth.json $H/c/ && HOME=$H CODEX_HOME=$H/c codex exec --skip-git-repo-check --ephemeral -s read-only -C $H -o $H/out - >/dev/null && cat $H/out; s=$?; find $H -delete; exit $s; }' \
   > inputs/<name>.key.review.json
 ```
 
-(That wrapper isolates Codex from your global config; see Traps.) Strip any prose or code fences, drop the `changes` array, save as `inputs/<name>.key.json` (same basename as the input; the script finds it by name). Show the user the `changes` list and the weight-3 facts: they know the material, and a wrong key wrongs every model equally. Key shape: `examples/csv-export-session.key.json`.
+(That wrapper isolates Codex from your global config; see Traps.) Strip any prose or code fences, drop the `changes` array, save as `inputs/<name>.key.json` (same basename as the input; the script finds it by name). Show the user the `changes` list and the weight-3 facts: they know the material, and a wrong key wrongs every model equally. Key shape: `examples/csv-export-session.key.json`. Size the key to the job's output limit: if the job caps output at N items, the weight-3 facts (and ideally all facts) must fit in N, or no model can reach full recall.
 
 ## 4. Add each model as one config line
 
@@ -39,12 +39,12 @@ Each model is a shell command: the prompt arrives on stdin, the answer is read f
 "models": {
   "baseline": "tail -n 40 \"$EVAL_INPUT\"",
   "haiku":  "cd /tmp && claude -p --model haiku --setting-sources '' --tools '' --strict-mcp-config --no-session-persistence --system-prompt 'Follow the instructions in the user message exactly.'",
-  "qwen":   "ollama run --think=false --hidethinking qwen3.5:9b-32k",
-  "codex":  "H=$(mktemp -d) && mkdir $H/c && ln -s ~/.codex/auth.json $H/c/ && HOME=$H CODEX_HOME=$H/c codex exec --skip-git-repo-check --ephemeral -s read-only -C $H -o $H/out - >/dev/null && cat $H/out; rm -rf $H"
+  "qwen":   "ollama run --nowordwrap --think=false --hidethinking qwen3.5:9b-32k",
+  "codex":  "H=$(mktemp -d) && { mkdir $H/c && ln -s ~/.codex/auth.json $H/c/ && HOME=$H CODEX_HOME=$H/c codex exec --skip-git-repo-check --ephemeral -s read-only -C $H -o $H/out - >/dev/null && cat $H/out; s=$?; find $H -delete; exit $s; }"
 }
 ```
 
-`qwen3.5:9b-32k` is a local alias with a bigger context window; make it with a two-line Modelfile (see the Ollama context trap). Set `"judge"` (and optionally `"grounder"`) the same way. Use a capable model for both. Add your inputs to `"inputs"` and set `"job"`.
+`qwen3.5:9b-32k` is a local alias with a bigger context window; make it with a two-line Modelfile (see the Ollama context trap). Set `"judge"` (and optionally `"grounder"`) the same way. Use a capable model for both. `"judgeNote"` (optional) appends a job-specific grading rule to the judge prompt, e.g. "a timestamp within 15 seconds of the key's counts as correct". Add your inputs to `"inputs"` and set `"job"`.
 
 ## 5. Run the baseline first
 
@@ -56,7 +56,9 @@ Each model is a shell command: the prompt arrives on stdin, the answer is read f
 
 ## 7. Replicate anything that looks good
 
-A single great run at temperature 0 can be luck. Before you tell the user a model wins, re-run the leaders with sampling on and several replicates (see the replicates comment in `eval.mjs`) and check the spread. A different judge model on the same outputs (`--rejudge` with `"judge"` changed) checks for self-preference.
+A single great run at temperature 0 can be luck. Before you tell the user a model wins, re-run the leaders with sampling on and several replicates (see the replicates comment in `eval.mjs`) and check the spread. A different judge model on the same outputs checks for self-preference.
+
+Keep each replicate or judge in its own output dir: copy the config next to the original (paths resolve relative to the config file), set `"out": "runs-r2"` (or `"runs-xjudge"`) and any changed `"judge"`/model commands, and run `node eval.mjs --config=eval.r2.config.json`. For a different-judge rerun, copy `runs/<model>/*.out.json` into `runs-xjudge/<model>/` first; only judging and grounding then run. Use separate out dirs per parallel process: each run overwrites `results.md`/`results.json` with only the models it ran, and two processes on the same model race on its cache files. (Parallel runs with disjoint `--models` on one dir are safe for the cache; re-run plain `node eval.mjs` afterwards to rebuild the full table from cache.)
 
 ## 8. Read the results
 
@@ -80,9 +82,10 @@ Report the table plus what you saw reading outputs. `runs/results.json` has per-
 
 ## Traps (each one bit us)
 
-- **`codex exec` injects your global `~/.codex/AGENTS.md` and skills list (~35KB) into every call**, even with `--ignore-user-config`. The codex line above runs it with a throwaway `HOME` and a `CODEX_HOME` holding only a symlinked `auth.json`. Verify with `codex debug prompt-input` under the same env.
+- **`codex exec` injects your global `~/.codex/AGENTS.md` and skills list (~35KB) into every call**, even with `--ignore-user-config`. The codex line above runs it with a throwaway `HOME` and a `CODEX_HOME` holding only a symlinked `auth.json`. Verify with `codex debug prompt-input` under the same env. Each call writes ~900 files (bundled skills/plugins, sqlite state) into that `CODEX_HOME`, so the line ends with `find $H -delete`, not `rm -rf $H`: agent safety guards block `rm -rf` on a variable path, and a skipped cleanup leaves a dir holding an `auth.json` symlink per call.
 - **`claude -p` still injects an environment block** (cwd, git status, platform, date) even with `--setting-sources '' --system-prompt …`. It's small, but outputs echo it ("Is a git repository: false" showed up as an open item). Run it from a neutral directory (`cd /tmp &&`) so your project's details don't leak in. `--bare` drops more but needs an API key, not a subscription login.
 - **Terminal wrappers can shim `codex`/`claude`** and add hooks that run inside every call (seen with cmux's shim, even under the throwaway `HOME`). Check `command -v codex`; point the config at the real binary if it's a shim.
+- **`ollama run` word-wraps with terminal escape codes (`\e[K`, `\e[1D`) even when stdout is piped**, so the judge grades garbled text. Always pass `--nowordwrap`; check outputs with `grep -c $'\e' runs/*/*.out.md`.
 - **A local model's thinking can eat the whole output budget** and return empty output (gemma4 on Ollama needed `--think=false`). Empty output scores 0 and is counted in the table's `empty` column; a non-zero there usually means a config fix, not a bad model.
 - **Ollama silently truncates input past its context window (`num_ctx`)**, and the default is often far smaller than a long input. `ollama run` has no flag for it; create an alias with a Modelfile:
   ```sh

@@ -96,7 +96,9 @@ function doJob(cmd, src, inputPath) {
 // Sonnet-as-judge doubled Sonnet's own lead vs Opus/Codex judges.
 function judge(key, output) {
 	const visible = { facts: key.facts.map(({ id, fact }) => ({ id, fact })), noise: key.noise || [], qa: key.qa };
-	const stdin = `${prompt('judge')}\n\nANSWER KEY:\n${JSON.stringify(visible, null, 2)}\n\nOUTPUT TO GRADE:\n<output>\n${output}\n</output>`;
+	// "judgeNote": job-specific grading rule (e.g. a timestamp tolerance) without forking judge.md.
+	const note = cfg.judgeNote ? `\n\nJOB-SPECIFIC RULE: ${cfg.judgeNote}` : '';
+	const stdin = `${prompt('judge')}${note}\n\nANSWER KEY:\n${JSON.stringify(visible, null, 2)}\n\nOUTPUT TO GRADE:\n<output>\n${output}\n</output>`;
 	return askJson(JUDGE, stdin, (j) => j.facts && j.qa);
 }
 
