@@ -160,6 +160,9 @@ for (const input of cfg.inputs) {
 				rows.push({ model, input: name, secs: out.secs, recall: 0, qa: 0, madeup: 0, flagged: 0, noise: 0, overall: 0, empty: 1 });
 				continue;
 			}
+			// VARIATION: writing jobs (blog posts, emails). Fact-based scoring can't tell a good post
+			// from a dry one. Add a second judge that sees ONLY the output, using prompts/readability.md,
+			// reported as its own column(s) and kept out of `overall`; a word/length-limit check goes beside it.
 			process.stderr.write(' judge');
 			const v = cached(`${base}.judge.json`, args.force || args.rejudge, () => judge(key, out.output));
 			process.stderr.write(' ground\n');

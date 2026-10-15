@@ -37,7 +37,7 @@ Each model is a shell command: the prompt arrives on stdin, the answer is read f
 
 ```json
 "models": {
-  "baseline": "tail -n 40 \"$EVAL_INPUT\"",
+  "baseline": "cat >/dev/null; tail -n 40 \"$EVAL_INPUT\"",
   "haiku":  "cd /tmp && claude -p --model haiku --setting-sources '' --tools '' --strict-mcp-config --no-session-persistence --system-prompt 'Follow the instructions in the user message exactly.'",
   "qwen":   "ollama run --nowordwrap --think=false --hidethinking qwen3.5:9b-32k",
   "codex":  "H=$(mktemp -d) && { mkdir $H/c && ln -s ~/.codex/auth.json $H/c/ && HOME=$H CODEX_HOME=$H/c codex exec --skip-git-repo-check --ephemeral -s read-only -C $H -o $H/out - >/dev/null && cat $H/out; s=$?; find $H -delete; exit $s; }"
@@ -48,7 +48,7 @@ Each model is a shell command: the prompt arrives on stdin, the answer is read f
 
 ## 5. Run the baseline first
 
-`baseline` is a command with no model, here the last 40 lines of the input. Pick the dumbest plausible no-model answer for your job (first N lines, a regex extract, "always answer the majority class"). Run `node eval.mjs --models=baseline`. Every model must beat this number; one that doesn't is not worth its cost. Keep `"baseline": "<name>"` in the config so the table shows a "vs baseline" column.
+`baseline` is a command with no model, here the last 40 lines of the input (after `cat >/dev/null` drains the prompt; see the stdin trap). Pick the dumbest plausible no-model answer for your job (first N lines, a regex extract, "always answer the majority class"). Run `node eval.mjs --models=baseline`. Every model must beat this number; one that doesn't is not worth its cost. Keep `"baseline": "<name>"` in the config so the table shows a "vs baseline" column.
 
 ## 6. Run the matrix
 
@@ -79,9 +79,12 @@ Report the table plus what you saw reading outputs. `runs/results.json` has per-
 - **Preserve-information jobs** (summarize, condense, extract notes, rewrite for an audience): use the judge as shipped. Recall measures coverage, QA measures whether the output is usable, made-up penalizes invention.
 - **Classification / single-answer jobs** (label, route, yes/no, pick-one): no judge. Put `"expected"` in each key and compare exactly; see the exact-match comment in `eval.mjs`. Cheaper, deterministic, no judge bias.
 - **Generation with no single right answer** (drafting, tone): the judge's facts/QA still apply if you can state what must be in the output; otherwise this harness is the wrong tool.
+- **Jobs that produce writing for readers** (blog posts, emails): facts/QA can't tell a good post from a dry one. Add a second judge that sees only the output, using `prompts/readability.md` (edit its audience lines for your job), as its own column(s) outside `overall`, plus a word-limit check; see the readability comment in `eval.mjs`.
 
 ## Traps (each one bit us)
 
+- **A model command that ignores stdin crashes with a broken pipe (EPIPE).** `eval.mjs` writes the prompt to every command's stdin; a no-model baseline that only reads `$EVAL_INPUT` exits without reading it, and the write fails once the prompt outgrows the pipe buffer. Start such commands with `cat >/dev/null;`.
+- **An old CLI may reject a newer model.** Homebrew's `codex` 0.142.x refused `gpt-6-luna` on a ChatGPT login ("not supported when using Codex with a ChatGPT account") while codex 0.162.1 at `~/.local/bin/codex` ran it. When a model is rejected, check `codex --version` (or `claude --version`) and which binary the config line actually calls (`command -v`); point it at the newer one by full path.
 - **`codex exec` injects your global `~/.codex/AGENTS.md` and skills list (~35KB) into every call**, even with `--ignore-user-config`. The codex line above runs it with a throwaway `HOME` and a `CODEX_HOME` holding only a symlinked `auth.json`. Verify with `codex debug prompt-input` under the same env. Each call writes ~900 files (bundled skills/plugins, sqlite state) into that `CODEX_HOME`, so the line ends with `find $H -delete`, not `rm -rf $H`: agent safety guards block `rm -rf` on a variable path, and a skipped cleanup leaves a dir holding an `auth.json` symlink per call.
 - **`claude -p` still injects an environment block** (cwd, git status, platform, date) even with `--setting-sources '' --system-prompt …`. It's small, but outputs echo it ("Is a git repository: false" showed up as an open item). Run it from a neutral directory (`cd /tmp &&`) so your project's details don't leak in. `--bare` drops more but needs an API key, not a subscription login.
 - **Terminal wrappers can shim `codex`/`claude`** and add hooks that run inside every call (seen with cmux's shim, even under the throwaway `HOME`). Check `command -v codex`; point the config at the real binary if it's a shim.

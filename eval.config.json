@@ -4,7 +4,7 @@
   "judge": "cd /tmp && claude -p --model sonnet --setting-sources '' --tools '' --strict-mcp-config --no-session-persistence --system-prompt 'Follow the instructions in the user message exactly.'",
   "baseline": "baseline",
   "models": {
-    "baseline": "tail -n 12 \"$EVAL_INPUT\"",
+    "baseline": "cat >/dev/null; tail -n 12 \"$EVAL_INPUT\"",
     "haiku": "cd /tmp && claude -p --model haiku --setting-sources '' --tools '' --strict-mcp-config --no-session-persistence --system-prompt 'Follow the instructions in the user message exactly.'"
   },
   "timeoutSec": 900
