@@ -79,14 +79,15 @@ function cached(file, redo, make) {
 // - Decision-model chunk gate: before each chunk, ask a cheap model "anything worth
 //   keeping? yes/no" and skip the no's. Needs chunking + a gate prompt; log which
 //   weight-3 facts lived in skipped chunks. In our run no gate helped.
+// To compare a variation against the plain call, add a branch here (e.g. on the model
+// name) and give the variant its own entry under "models" so both land in one table.
 // Do NOT truncate to fit a small context: in our run it took the best model 0.80 -> 0.16.
 function doJob(cmd, src, inputPath) {
 	const p = jobPrompt.includes('{{input}}') ? jobPrompt.replace('{{input}}', () => src) : `${jobPrompt}\n\n${src}`;
 	const r = run(cmd, p, { EVAL_INPUT: inputPath });
-	// An empty answer is a config problem (often a local model's thinking ate the
-	// output budget), not a score of zero. Fail loudly and leave it uncached.
-	if (!r.text) throw new Error(`\`${cmd}\` returned empty output`);
-	return { output: r.text, secs: r.secs };
+	// Empty output (often a local model's thinking ate the output budget) is a real
+	// result: it scores 0 and stays in the table. Dropping it would bias means upward.
+	return { output: r.text, secs: r.secs, empty: !r.text };
 }
 
 // --- judging ----------------------------------------------------------------
@@ -152,11 +153,16 @@ for (const input of cfg.inputs) {
 			process.stderr.write(`${model} x ${name}: job`);
 			const out = cached(`${base}.out.json`, args.force, () => doJob(cmd, src, inputPath));
 			writeFileSync(`${base}.out.md`, out.output);
+			if (out.empty) {
+				process.stderr.write(' EMPTY output, scored 0\n');
+				rows.push({ model, input: name, secs: out.secs, recall: 0, qa: 0, madeup: 0, flagged: 0, noise: 0, overall: 0, empty: 1 });
+				continue;
+			}
 			process.stderr.write(' judge');
 			const v = cached(`${base}.judge.json`, args.force || args.rejudge, () => judge(key, out.output));
 			process.stderr.write(' ground\n');
 			const g = cached(`${base}.ground.json`, args.force || args.rejudge, () => ground(src, v.madeup || []));
-			rows.push({ model, input: name, secs: out.secs, ...score(key, v, g) });
+			rows.push({ model, input: name, secs: out.secs, empty: 0, ...score(key, v, g) });
 		} catch (e) {
 			process.stderr.write(` ERROR\n  ${e.message}\n`);
 			errors.push(`${model} x ${name}: ${e.message}`);
@@ -168,16 +174,16 @@ const models = [...new Set(rows.map((r) => r.model))];
 const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
 const stats = models.map((m) => {
 	const rs = rows.filter((r) => r.model === m);
-	const s = { model: m, n: rs.length };
+	const s = { model: m, n: rs.length, empty: rs.filter((r) => r.empty).length };
 	for (const k of ['recall', 'qa', 'madeup', 'flagged', 'noise', 'overall', 'secs']) s[k] = mean(rs.map((r) => r[k]));
 	return s;
 }).sort((a, b) => b.overall - a.overall);
 const bar = stats.find((s) => s.model === cfg.baseline)?.overall;
 const f = (x, d = 2) => x.toFixed(d);
 const lines = [
-	'| model | n | recall | QA | made-up | flagged | noise | overall | vs baseline | sec |',
-	'|---|---|---|---|---|---|---|---|---|---|',
-	...stats.map((s) => `| ${s.model} | ${s.n} | ${f(s.recall)} | ${f(s.qa)} | ${f(s.madeup, 1)} | ${f(s.flagged, 1)} | ${f(s.noise, 1)} | **${f(s.overall)}** | ${bar === undefined || s.model === cfg.baseline ? '-' : (s.overall >= bar ? '+' : '') + f(s.overall - bar)} | ${f(s.secs, 0)} |`),
+	'| model | n | recall | QA | made-up | flagged | noise | overall | vs baseline | empty | sec |',
+	'|---|---|---|---|---|---|---|---|---|---|---|',
+	...stats.map((s) => `| ${s.model} | ${s.n} | ${f(s.recall)} | ${f(s.qa)} | ${f(s.madeup, 1)} | ${f(s.flagged, 1)} | ${f(s.noise, 1)} | **${f(s.overall)}** | ${bar === undefined || s.model === cfg.baseline ? '-' : (s.overall >= bar ? '+' : '') + f(s.overall - bar)} | ${s.empty} | ${f(s.secs, 0)} |`),
 ];
 const table = lines.join('\n');
 mkdirSync(OUT, { recursive: true });
