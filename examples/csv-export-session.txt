@@ -1,0 +1,29 @@
+[user] The recipe-box CLI needs an `export --csv` command. Recipes live in data/recipes.json. Can you add it?
+
+[agent] Reading src/commands/export.js. It only handles `--json` today. I'll add a `--csv` branch. Plan: use the csv-stringify package for quoting.
+
+[tool] $ npm install csv-stringify
+added 1 package, audited 214 packages in 2s
+3 moderate severity vulnerabilities. To address all issues, run: npm audit fix
+
+[user] No new dependencies in this project, please. Write the quoting yourself. Also, I'm grabbing lunch, back in 20.
+
+[agent] Understood. Ran `npm uninstall csv-stringify`. Writing a toCsvRow() helper in src/lib/csv.js that quotes a field only when it contains a comma or a double quote.
+
+[tool] $ npm test
+FAIL test/export.test.js
+  csv export > keeps multi-line instructions in one cell
+  Expected 3 rows, received 5
+
+[agent] The failure is embedded newlines in the `instructions` field: unquoted, they split one recipe across rows. Rather than add newline to the special-case list, I'm switching toCsvRow() to quote EVERY field and double any inner quotes, per RFC 4180. Simpler and it can't miss a case.
+
+[tool] $ npm test
+PASS test/export.test.js (6 tests)
+
+[user] Back. Looks good. One thing: the `created` column should be ISO 8601 dates (2024-03-09), not the locale string it prints now.
+
+[agent] Changed the `created` column to `new Date(r.created).toISOString().slice(0, 10)`. Tests pass. Committed as 4f2a9c1 "Add export --csv with RFC 4180 quoting".
+
+[user] Great. Next time we should also add `--tsv`, but not today. And the README still doesn't mention export at all.
+
+[agent] Noted. Not done: `--tsv` flag, and a README section for the export command.

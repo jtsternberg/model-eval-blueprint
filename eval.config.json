@@ -1,0 +1,11 @@
+{
+  "job": "prompts/jobs/condense-transcript.md",
+  "inputs": ["examples/csv-export-session.txt"],
+  "judge": "cd /tmp && claude -p --model sonnet --setting-sources '' --tools '' --strict-mcp-config --no-session-persistence --system-prompt 'Follow the instructions in the user message exactly.'",
+  "baseline": "baseline",
+  "models": {
+    "baseline": "tail -n 12 \"$EVAL_INPUT\"",
+    "haiku": "cd /tmp && claude -p --model haiku --setting-sources '' --tools '' --strict-mcp-config --no-session-persistence --system-prompt 'Follow the instructions in the user message exactly.'"
+  },
+  "timeoutSec": 900
+}
